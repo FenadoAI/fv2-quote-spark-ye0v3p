@@ -73,6 +73,20 @@ class SearchResponse(BaseModel):
     sources_count: int
     error: Optional[str] = None
 
+
+# Quote generation models
+class QuoteRequest(BaseModel):
+    theme: str
+    custom_theme: Optional[str] = None
+
+
+class QuoteResponse(BaseModel):
+    success: bool
+    quote: str
+    author: str
+    theme: str
+    error: Optional[str] = None
+
 # Routes
 @api_router.get("/")
 async def root():
@@ -194,6 +208,96 @@ async def get_agent_capabilities():
             "success": False,
             "error": str(e)
         }
+
+
+@api_router.post("/generate-quote", response_model=QuoteResponse)
+async def generate_quote(request: QuoteRequest):
+    """Generate a famous quote based on the provided theme"""
+    global chat_agent
+
+    try:
+        # Initialize chat agent if needed
+        if chat_agent is None:
+            chat_agent = ChatAgent(agent_config)
+
+        # Use custom theme if provided, otherwise use the selected theme
+        theme = request.custom_theme if request.custom_theme else request.theme
+
+        # Create a detailed prompt for generating authentic quotes
+        quote_prompt = f"""Generate a famous, authentic quote about '{theme}'.
+
+        Requirements:
+        - The quote must be from a real, famous historical figure, author, philosopher, leader, or well-known personality
+        - The quote should be relevant to the theme of '{theme}'
+        - Return ONLY the quote text and author name in this exact format:
+        Quote: "[quote text]"
+        Author: [author name]
+
+        Do not include any additional text, explanations, or formatting."""
+
+        # Execute the agent
+        result = await chat_agent.execute(quote_prompt)
+
+        if result.success:
+            # Parse the response to extract quote and author
+            response_text = result.content.strip()
+
+            # Extract quote and author using string parsing
+            quote = ""
+            author = ""
+
+            lines = response_text.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line.startswith('Quote:'):
+                    quote = line.replace('Quote:', '').strip()
+                    # Remove quotes if present
+                    if quote.startswith('"') and quote.endswith('"'):
+                        quote = quote[1:-1]
+                elif line.startswith('Author:'):
+                    author = line.replace('Author:', '').strip()
+
+            # Fallback parsing if the format is different
+            if not quote or not author:
+                # Try to find quote in quotes and author after dash
+                import re
+                quote_match = re.search(r'"([^"]+)"', response_text)
+                author_match = re.search(r'-\s*([^-\n]+)$', response_text, re.MULTILINE)
+
+                if quote_match:
+                    quote = quote_match.group(1)
+                if author_match:
+                    author = author_match.group(1).strip()
+
+            # Final fallback - use the whole response as quote if parsing fails
+            if not quote:
+                quote = response_text
+                author = "Unknown"
+
+            return QuoteResponse(
+                success=True,
+                quote=quote,
+                author=author,
+                theme=theme
+            )
+        else:
+            return QuoteResponse(
+                success=False,
+                quote="",
+                author="",
+                theme=theme,
+                error=result.error
+            )
+
+    except Exception as e:
+        logger.error(f"Error generating quote: {e}")
+        return QuoteResponse(
+            success=False,
+            quote="",
+            author="",
+            theme=theme,
+            error=str(e)
+        )
 
 # Include router
 app.include_router(api_router)
